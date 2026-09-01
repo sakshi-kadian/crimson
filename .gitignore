@@ -1,0 +1,18 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyTorch checkpoints (large binary files)
+*.pth
+
+# Hydra auto-generated directories
+outputs/
+.hydra/
+
+# CIFAR-100 dataset (downloaded automatically on first run)
+data/
+
+# TensorBoard raw event files (too large, not human-readable)
+logs/
+

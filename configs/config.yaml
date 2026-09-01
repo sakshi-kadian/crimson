@@ -1,0 +1,10 @@
+defaults:
+  - model: resnet50
+  - dataset: cifar100
+  - hardware: single_gpu
+  - _self_
+
+# Global settings
+project_name: "crimson"
+output_dir: "./outputs"
+seed: 42
