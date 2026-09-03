@@ -11,7 +11,7 @@ outputs/
 .hydra/
 
 # CIFAR-100 dataset (downloaded automatically on first run)
-data/
+/data/
 
 # TensorBoard raw event files (too large, not human-readable)
 logs/
