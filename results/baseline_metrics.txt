@@ -1,0 +1,10 @@
+Mode: Single-Process (CPU / gloo backend)
+Batch Size: 64
+Epochs Run: 5
+Epoch 1 Train Loss: 4.9288 | Val Acc: 1.56%
+Epoch 2 Train Loss: 4.8536 | Val Acc: 1.88%
+Epoch 3 Train Loss: 4.8696 | Val Acc: 0.94%
+Epoch 4 Train Loss: 4.8409 | Val Acc: 2.19%
+Epoch 5 Train Loss: 4.8147 | Val Acc: 3.44%
+Average Throughput: 89.41 samples/sec
+Average GPU Utilization: N/A (CPU Mode)
