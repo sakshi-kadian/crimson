@@ -39,6 +39,10 @@ class Trainer:
         
         self.throughput_meter = ThroughputMeter()
         self.gpu_tracker = GPUUtilizationTracker()
+        
+        # Automatic Mixed Precision (AMP) setup
+        self.use_amp = getattr(cfg.hardware, "use_amp", False) and torch.cuda.is_available()
+        self.scaler = torch.amp.GradScaler("cuda", enabled=self.use_amp)
 
     def train(self):
         """Executes the full training and validation loop across all epochs."""
@@ -71,15 +75,21 @@ class Trainer:
             images, labels = images.to(self.device), labels.to(self.device)
             
             self.optimizer.zero_grad()
-            outputs = self.model(images)
-            loss = self.criterion(outputs, labels)
             
-            loss.backward()
+            # Forward pass with Automatic Mixed Precision (AMP)
+            with torch.amp.autocast("cuda", enabled=self.use_amp):
+                outputs = self.model(images)
+                loss = self.criterion(outputs, labels)
             
-            # Gradient clipping (standard practice for stable training)
+            # Backward pass with GradScaler
+            self.scaler.scale(loss).backward()
+            
+            # Unscale gradients for clipping before stepping
+            self.scaler.unscale_(self.optimizer)
             nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.model.max_grad_norm)
             
-            self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             
             # Metrics calculation
             total_loss += loss.item()
