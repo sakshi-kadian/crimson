@@ -37,6 +37,8 @@ class Trainer:
         self.output_dir = cfg.output_dir
         self.best_acc = 0.0
         
+        self.accumulation_steps = getattr(cfg.hardware, "accumulation_steps", 1)
+        
         self.throughput_meter = ThroughputMeter()
         self.gpu_tracker = GPUUtilizationTracker()
         
@@ -71,28 +73,33 @@ class Trainer:
         self.throughput_meter.start()
         self.gpu_tracker.reset()
         
+        self.optimizer.zero_grad()
+        
         for step, (images, labels) in enumerate(self.train_loader):
             images, labels = images.to(self.device), labels.to(self.device)
-            
-            self.optimizer.zero_grad()
             
             # Forward pass with Automatic Mixed Precision (AMP)
             with torch.amp.autocast("cuda", enabled=self.use_amp):
                 outputs = self.model(images)
                 loss = self.criterion(outputs, labels)
+                # Scale loss by accumulation steps to maintain effective learning rate
+                loss = loss / self.accumulation_steps
             
             # Backward pass with GradScaler
             self.scaler.scale(loss).backward()
             
-            # Unscale gradients for clipping before stepping
-            self.scaler.unscale_(self.optimizer)
-            nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.model.max_grad_norm)
-            
-            self.scaler.step(self.optimizer)
-            self.scaler.update()
+            # Perform optimizer step only after accumulation_steps or at epoch end
+            if (step + 1) % self.accumulation_steps == 0 or (step + 1) == len(self.train_loader):
+                # Unscale gradients for clipping before stepping
+                self.scaler.unscale_(self.optimizer)
+                nn.utils.clip_grad_norm_(self.model.parameters(), self.cfg.model.max_grad_norm)
+                
+                self.scaler.step(self.optimizer)
+                self.scaler.update()
+                self.optimizer.zero_grad()
             
             # Metrics calculation
-            total_loss += loss.item()
+            total_loss += loss.item() * self.accumulation_steps
             _, predicted = outputs.max(1)
             total += labels.size(0)
             correct += predicted.eq(labels).sum().item()
@@ -105,7 +112,7 @@ class Trainer:
             
             # Log to TensorBoard every 50 steps (only on Rank 0)
             if self.rank == 0 and step % 50 == 0:
-                self.logger.log_scalar("train/loss", loss.item(), global_step)
+                self.logger.log_scalar("train/loss", loss.item() * self.accumulation_steps, global_step)
                 self.logger.log_scalar("hardware/throughput", self.throughput_meter.get_throughput(), global_step)
                 self.logger.log_gpu_utilization(gpu_util, global_step)
                 
