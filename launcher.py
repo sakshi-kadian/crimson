@@ -43,6 +43,17 @@ def main(cfg: DictConfig):
     )
     criterion = nn.CrossEntropyLoss()
     
+    # LR Scheduler
+    warmup_epochs = getattr(cfg.model, "warmup_epochs", 0)
+    total_epochs = getattr(cfg.model, "epochs", 10)
+    
+    if warmup_epochs > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, end_factor=1.0, total_iters=warmup_epochs)
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs - warmup_epochs)
+        scheduler = torch.optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_epochs)
+    
     # Logger
     tb_dir = getattr(cfg, "logging", {}).get("tensorboard_dir", "logs/tensorboard") if hasattr(cfg, "logging") else "logs/tensorboard"
     logger = TensorBoardLogger(tb_dir, rank=rank)
@@ -59,6 +70,7 @@ def main(cfg: DictConfig):
         logger=logger,
         cfg=cfg,
         train_sampler=train_sampler,
+        scheduler=scheduler,
     )
     
     # Run training loop

@@ -20,7 +20,8 @@ class Trainer:
         rank,
         logger,
         cfg,
-        train_sampler=None
+        train_sampler=None,
+        scheduler=None
     ):
         self.model = model
         self.train_loader = train_loader
@@ -32,6 +33,7 @@ class Trainer:
         self.logger = logger
         self.cfg = cfg
         self.train_sampler = train_sampler
+        self.scheduler = scheduler
         
         self.epochs = cfg.model.epochs
         self.output_dir = cfg.output_dir
@@ -56,8 +58,15 @@ class Trainer:
             train_loss, train_acc = self._train_epoch(epoch)
             val_loss, val_acc = self._validate_epoch(epoch)
             
+            if self.scheduler is not None:
+                self.scheduler.step()
+            
             if self.rank == 0:
                 print(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | Val Acc: {val_acc:.2f}%")
+                
+                if self.scheduler is not None:
+                    current_lr = self.scheduler.get_last_lr()[0]
+                    self.logger.log_scalar("train/lr", current_lr, epoch)
                 
                 # Checkpointing logic: save only if validation accuracy improves
                 if val_acc > self.best_acc:
@@ -74,6 +83,29 @@ class Trainer:
         self.gpu_tracker.reset()
         
         self.optimizer.zero_grad()
+        
+        # PyTorch Profiler setup (only profile the first 5 steps of the first epoch if enabled)
+        profiler = None
+        if epoch == 0 and getattr(self.cfg.hardware, "profile", False):
+            os.makedirs("results/profiler", exist_ok=True)
+            
+            def trace_handler(p):
+                print(f"[Rank {self.rank}] Exporting Chrome trace to results/profiler/trace_rank{self.rank}.json...")
+                p.export_chrome_trace(f"results/profiler/trace_rank{self.rank}.json")
+                
+            activities = [torch.profiler.ProfilerActivity.CPU]
+            if torch.cuda.is_available():
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
+                
+            profiler = torch.profiler.profile(
+                activities=activities,
+                schedule=torch.profiler.schedule(wait=1, warmup=1, active=3, repeat=1),
+                on_trace_ready=trace_handler,
+                record_shapes=True,
+                profile_memory=True,
+                with_stack=True
+            )
+            profiler.start()
         
         for step, (images, labels) in enumerate(self.train_loader):
             images, labels = images.to(self.device), labels.to(self.device)
@@ -115,6 +147,13 @@ class Trainer:
                 self.logger.log_scalar("train/loss", loss.item() * self.accumulation_steps, global_step)
                 self.logger.log_scalar("hardware/throughput", self.throughput_meter.get_throughput(), global_step)
                 self.logger.log_gpu_utilization(gpu_util, global_step)
+            
+            # Step the profiler and stop after 5 steps
+            if profiler is not None:
+                profiler.step()
+                if step >= 5:
+                    profiler.stop()
+                    profiler = None
                 
         return total_loss / len(self.train_loader), 100. * correct / total
 
