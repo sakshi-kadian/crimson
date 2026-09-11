@@ -1,0 +1,22 @@
+# Best Hyperparameters Configuration (Found after baseline runs)
+model:
+  name: "resnet50"
+  num_classes: 100
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  epochs: 10
+  warmup_epochs: 2
+  max_grad_norm: 1.0
+
+dataset:
+  name: "cifar100"
+  batch_size: 64
+  num_workers: 4
+  pin_memory: true
+
+hardware:
+  mode: "ddp"
+  backend: "nccl"
+  use_amp: true
+  accumulation_steps: 4
+  profile: false
