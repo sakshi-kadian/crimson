@@ -1,0 +1,22 @@
+Gradient Accumulation Impact Analysis
+Hardware: Kaggle NVIDIA T4 x2
+Model: ResNet-50 | Dataset: CIFAR-100
+
+Without Gradient Accumulation (Single GPU, Run 1 (Baseline)):
+  Accumulation Steps: 1
+  Per-Step Batch Size: 64
+  Effective Global Batch Size: 64
+  AllReduce Calls per Epoch: Every step
+
+With Gradient Accumulation (DDP 2-GPU, Run 2 (DDP)):
+  Accumulation Steps: 4
+  Per-Step Batch Size: 64
+  Effective Global Batch Size: 512 (64 x 4 accum x 2 GPUs)
+  AllReduce Calls per Epoch: Every 4 steps (amortized)
+
+Impact:
+  Gradient accumulation reduces AllReduce frequency by 4x, amortizing
+  NCCL communication overhead across 4 micro-batches before each sync.
+  This allows training with an effective batch size of 512 while
+  each GPU only holds 64 samples in VRAM at once, enabling large-batch
+  optimization on memory-constrained hardware (T4: 16GB VRAM).

@@ -1,0 +1,21 @@
+AMP (Automatic Mixed Precision) Impact Analysis
+Hardware: Kaggle NVIDIA T4 x2
+Model: ResNet-50 | Dataset: CIFAR-100 | Batch Size: 64
+
+Without AMP (Single GPU, Run 1 (Baseline)):
+  Precision: FP32
+  Avg Throughput: 935.06 samples/sec
+  Avg GPU Utilization: 85.9%
+  Best Val Accuracy: 1.35%
+
+With AMP (DDP 2-GPU, Run 2 (DDP)):
+  Precision: FP16 (autocast) with FP32 GradScaler
+  Avg Throughput per GPU: 740.78 samples/sec
+  Total Throughput (2 GPUs): 1481.55 samples/sec
+  Avg GPU Utilization: 46.4%
+  Best Val Accuracy: 1.18%
+
+Note: AMP was combined with DDP in Run 2 (DDP), so its isolated impact cannot be
+perfectly separated from NCCL communication overhead. However, AMP halves
+the gradient payload size from FP32 to FP16, directly reducing All-Reduce
+network traffic by ~50% during Ring-AllReduce synchronization.
