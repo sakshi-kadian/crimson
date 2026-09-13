@@ -34,11 +34,17 @@ def get_dataloaders(cfg, rank=0, world_size=1):
 
     is_distributed = cfg.hardware.mode == "ddp" and world_size > 1
 
-    if is_distributed and rank != 0:
+    if is_distributed:
         import torch.distributed as dist
-        dist.barrier()  # Wait for rank 0 to download the data
+        # Rank 0 downloads first to prevent race conditions on distributed filesystems.
+        # A single barrier then ensures all other ranks wait until data is on disk
+        # before attempting their own (no-op) download.
+        if rank == 0:
+            torchvision.datasets.CIFAR100(root=cfg.dataset.data_dir, download=True, transform=None)
+            torchvision.datasets.CIFAR100(root=cfg.dataset.data_dir, train=False, download=True, transform=None)
+        dist.barrier()  # All ranks sync here — data is guaranteed to exist after this point
 
-    # Download=True is a no-op if data already exists in data_dir
+    # All ranks create the datasets with proper transforms (download=True is a no-op if data exists)
     train_dataset = torchvision.datasets.CIFAR100(
         root=cfg.dataset.data_dir,
         train=True,
@@ -52,10 +58,6 @@ def get_dataloaders(cfg, rank=0, world_size=1):
         download=True,
         transform=val_transform,
     )
-
-    if is_distributed and rank == 0:
-        import torch.distributed as dist
-        dist.barrier()  # Release other ranks
 
     if is_distributed:
         # Shards the dataset across GPUs to prevent redundant computation
@@ -76,6 +78,7 @@ def get_dataloaders(cfg, rank=0, world_size=1):
         train_sampler = None
         val_sampler = None
         train_shuffle = True
+
 
     train_loader = DataLoader(
         train_dataset,

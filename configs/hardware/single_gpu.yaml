@@ -1,6 +1,6 @@
 name: "single_gpu"
 mode: "single"
-backend: "gloo"
+backend: "nccl"
 use_amp: false
 accumulation_steps: 1
 profile: false

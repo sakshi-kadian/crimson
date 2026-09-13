@@ -60,13 +60,13 @@ class Trainer:
                 self.train_sampler.set_epoch(epoch)
                 
             train_loss, train_acc = self._train_epoch(epoch)
-            val_loss, val_acc = self._validate_epoch(epoch)
+            val_loss, val_acc_top1, val_acc_top5 = self._validate_epoch(epoch)
             
             if self.scheduler is not None:
                 self.scheduler.step()
             
             if self.rank == 0:
-                print(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}%")
+                print(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Top-1: {val_acc_top1:.2f}% | Val Top-5: {val_acc_top5:.2f}%")
                 
                 self.logger.log_scalar("train/accuracy", train_acc, epoch)
                 
@@ -75,9 +75,12 @@ class Trainer:
                     self.logger.log_scalar("train/lr", current_lr, epoch)
                 
                 # Checkpointing logic: save only if validation accuracy improves
-                if val_acc > self.best_acc:
-                    self.best_acc = val_acc
-                    self._save_checkpoint(epoch, val_acc)
+                if val_acc_top1 > self.best_acc:
+                    self.best_acc = val_acc_top1
+                    self._save_checkpoint(epoch, val_acc_top1, is_best=True)
+                
+                # Fault Tolerance: Always save the latest epoch to resume from preemption
+                self._save_checkpoint(epoch, val_acc_top1, is_best=False)
 
     def _train_epoch(self, epoch):
         self.model.train()
@@ -149,7 +152,9 @@ class Trainer:
             
             # Hardware tracking
             self.throughput_meter.update(images.size(0))
-            gpu_util = self.gpu_tracker.sample(self.device.index if self.device.type == "cuda" else None)
+            # Defensive device_id: handles cuda:0 vs cuda (no explicit index) gracefully
+            device_id = self.device.index if (self.device.type == "cuda" and self.device.index is not None) else (0 if self.device.type == "cuda" else None)
+            gpu_util = self.gpu_tracker.sample(device_id)
             
             global_step = epoch * len(self.train_loader) + step
             
@@ -159,10 +164,9 @@ class Trainer:
                 self.logger.log_scalar("hardware/throughput", self.throughput_meter.get_throughput(), global_step)
                 self.logger.log_gpu_utilization(gpu_util, global_step)
             
-            # Step the profiler and stop after 5 steps
             if profiler is not None:
                 profiler.step()
-                if step >= 5:
+                if step >= 4:  # schedule=wait(1)+warmup(1)+active(3) = 5 total steps (0-4)
                     profiler.stop()
                     profiler = None
                 
@@ -171,7 +175,8 @@ class Trainer:
     def _validate_epoch(self, epoch):
         self.model.eval()
         total_loss = 0.0
-        correct = 0
+        correct_top1 = 0
+        correct_top5 = 0
         total = 0
         
         with torch.no_grad():
@@ -181,34 +186,45 @@ class Trainer:
                 loss = self.criterion(outputs, labels)
                 
                 total_loss += loss.item()
-                _, predicted = outputs.max(1)
+                
+                # Top-1 accuracy
+                _, predicted_top1 = outputs.max(1)
+                correct_top1 += predicted_top1.eq(labels).sum().item()
+                
+                # Top-5 accuracy: check if true label is in top-5 predictions
+                _, predicted_top5 = outputs.topk(5, dim=1, largest=True, sorted=True)
+                correct_top5 += predicted_top5.eq(labels.view(-1, 1).expand_as(predicted_top5)).any(dim=1).sum().item()
+                
                 total += labels.size(0)
-                correct += predicted.eq(labels).sum().item()
                 
         # Aggregate validation metrics across all GPUs
         is_ddp = getattr(self.cfg.hardware, "mode", "single") == "ddp"
         if is_ddp and torch.distributed.is_initialized():
             import torch.distributed as dist
-            metrics = torch.tensor([total_loss, correct, total], dtype=torch.float64, device=self.device)
+            metrics = torch.tensor([total_loss, correct_top1, correct_top5, total], dtype=torch.float32, device=self.device)
             dist.all_reduce(metrics, op=dist.ReduceOp.SUM)
-            total_loss, correct, total = metrics.tolist()
+            total_loss, correct_top1, correct_top5, total = metrics.tolist()
+            correct_top1, correct_top5, total = int(round(correct_top1)), int(round(correct_top5)), int(round(total))
             num_batches = len(self.val_loader) * dist.get_world_size()
         else:
             num_batches = len(self.val_loader)
 
         val_loss = total_loss / num_batches
-        val_acc = 100. * correct / total
+        val_acc_top1 = 100. * correct_top1 / total
+        val_acc_top5 = 100. * correct_top5 / total
         
         # Log validation metrics
         if self.rank == 0:
             self.logger.log_scalar("val/loss", val_loss, epoch)
-            self.logger.log_scalar("val/accuracy", val_acc, epoch)
+            self.logger.log_scalar("val/top1_accuracy", val_acc_top1, epoch)
+            self.logger.log_scalar("val/top5_accuracy", val_acc_top5, epoch)
             
-        return val_loss, val_acc
+        return val_loss, val_acc_top1
 
-    def _save_checkpoint(self, epoch, val_acc):
+    def _save_checkpoint(self, epoch, val_acc, is_best=True):
         os.makedirs(self.output_dir, exist_ok=True)
-        checkpoint_path = os.path.join(self.output_dir, "best_model.pth")
+        filename = "best_model.pth" if is_best else "epoch_latest.pth"
+        checkpoint_path = os.path.join(self.output_dir, filename)
         
         # Unwrap DDP model for clean saving (prevents 'module.' prefix issues on load)
         model_to_save = self.model.module if hasattr(self.model, "module") else self.model
@@ -221,4 +237,5 @@ class Trainer:
             "val_acc": val_acc,
         }, checkpoint_path)
         
-        print(f"[Rank 0] Saved new best checkpoint to {checkpoint_path} (Acc: {val_acc:.2f}%)")
+        if is_best:
+            print(f"[Rank 0] Saved new best checkpoint to {checkpoint_path} (Acc: {val_acc:.2f}%)")

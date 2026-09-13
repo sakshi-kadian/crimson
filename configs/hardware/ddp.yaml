@@ -3,4 +3,4 @@ mode: "ddp"
 backend: "nccl"
 use_amp: true
 accumulation_steps: 4
-profile: true
+profile: false

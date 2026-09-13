@@ -1,3 +1,6 @@
+# CPU environment (local dev / CI). Exact versions pinned for reproducibility.
+# For GPU training (Kaggle T4 / CUDA 12.x), replace with:
+#   pip install torch==2.3.1+cu121 torchvision==0.18.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 torch==2.3.1
 torchvision==0.18.1
 tensorboard==2.17.0
@@ -5,4 +8,4 @@ hydra-core==1.3.2
 omegaconf==2.3.0
 matplotlib==3.9.0
 numpy==1.26.4
-pytest==9.0.2
+wandb==0.17.0

@@ -20,6 +20,12 @@ def build_model(cfg, rank=None, world_size=None):
     num_ftrs = model.fc.in_features
     model.fc = nn.Linear(num_ftrs, cfg.model.num_classes)
     
+    if getattr(cfg.hardware, "mode", "single") == "ddp" and world_size > 1:
+        # Synchronize BatchNorm statistics across GPUs for mathematically exact global normalization
+        model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
+        
+        device_ids = [rank] if torch.cuda.is_available() else None
+
     is_ddp = cfg.hardware.mode == "ddp"
     has_cuda = torch.cuda.is_available()
     

@@ -8,3 +8,6 @@ defaults:
 project_name: "crimson"
 output_dir: "./outputs"
 seed: 42
+
+# Logging backend: "tensorboard" or "wandb"
+logger: "tensorboard"
