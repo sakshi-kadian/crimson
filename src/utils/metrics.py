@@ -4,13 +4,16 @@ import torch
 class ThroughputMeter:
     """
     Tracks samples processed per second.
-    Useful for benchmarking hardware scaling efficiency.
+    Uses torch.cuda.synchronize() to measure true GPU compute time,
+    excluding Python overhead, data loading, and CPU-GPU transfer time.
     """
     def __init__(self):
         self.start_time = None
         self.total_samples = 0
         
     def start(self):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         self.start_time = time.time()
         self.total_samples = 0
         
@@ -20,6 +23,8 @@ class ThroughputMeter:
     def get_throughput(self):
         if self.start_time is None:
             return 0.0
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
         elapsed = time.time() - self.start_time
         if elapsed == 0:
             return 0.0
