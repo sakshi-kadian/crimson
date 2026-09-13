@@ -11,6 +11,11 @@ def build_model(cfg, rank=None, world_size=None):
     # Load ResNet-50 without pre-trained weights (training from scratch)
     model = resnet50(weights=None)
     
+    # Replace 7x7 conv with 3x3 conv, stride 1 for 32x32 CIFAR images
+    model.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+    # Remove the maxpool layer
+    model.maxpool = nn.Identity()
+    
     # Replace final layer for CIFAR-100 (100 classes)
     num_ftrs = model.fc.in_features
     model.fc = nn.Linear(num_ftrs, cfg.model.num_classes)

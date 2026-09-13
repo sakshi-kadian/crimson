@@ -1,4 +1,5 @@
 import os
+import contextlib
 import torch
 import torch.nn as nn
 from src.utils.metrics import ThroughputMeter, GPUUtilizationTracker
@@ -21,7 +22,9 @@ class Trainer:
         logger,
         cfg,
         train_sampler=None,
-        scheduler=None
+        scheduler=None,
+        start_epoch=0,
+        best_acc=0.0
     ):
         self.model = model
         self.train_loader = train_loader
@@ -36,8 +39,9 @@ class Trainer:
         self.scheduler = scheduler
         
         self.epochs = cfg.model.epochs
+        self.start_epoch = start_epoch
         self.output_dir = cfg.output_dir
-        self.best_acc = 0.0
+        self.best_acc = best_acc
         
         self.accumulation_steps = getattr(cfg.hardware, "accumulation_steps", 1)
         
@@ -50,7 +54,7 @@ class Trainer:
 
     def train(self):
         """Executes the full training and validation loop across all epochs."""
-        for epoch in range(self.epochs):
+        for epoch in range(self.start_epoch, self.epochs):
             # Critical for DDP: forces the sampler to reshuffle data differently each epoch
             if self.train_sampler:
                 self.train_sampler.set_epoch(epoch)
@@ -62,7 +66,9 @@ class Trainer:
                 self.scheduler.step()
             
             if self.rank == 0:
-                print(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | Val Acc: {val_acc:.2f}%")
+                print(f"Epoch {epoch+1}/{self.epochs} | Train Loss: {train_loss:.4f} | Train Acc: {train_acc:.2f}% | Val Acc: {val_acc:.2f}%")
+                
+                self.logger.log_scalar("train/accuracy", train_acc, epoch)
                 
                 if self.scheduler is not None:
                     current_lr = self.scheduler.get_last_lr()[0]
@@ -110,15 +116,20 @@ class Trainer:
         for step, (images, labels) in enumerate(self.train_loader):
             images, labels = images.to(self.device), labels.to(self.device)
             
-            # Forward pass with Automatic Mixed Precision (AMP)
-            with torch.amp.autocast("cuda", enabled=self.use_amp):
-                outputs = self.model(images)
-                loss = self.criterion(outputs, labels)
-                # Scale loss by accumulation steps to maintain effective learning rate
-                loss = loss / self.accumulation_steps
+            # Use no_sync() to prevent All-Reduce overhead during gradient accumulation
+            is_sync_step = (step + 1) % self.accumulation_steps == 0 or (step + 1) == len(self.train_loader)
+            sync_context = self.model.no_sync() if not is_sync_step and hasattr(self.model, "no_sync") else contextlib.nullcontext()
             
-            # Backward pass with GradScaler
-            self.scaler.scale(loss).backward()
+            with sync_context:
+                # Forward pass with Automatic Mixed Precision (AMP)
+                with torch.amp.autocast("cuda", enabled=self.use_amp):
+                    outputs = self.model(images)
+                    loss = self.criterion(outputs, labels)
+                    # Scale loss by accumulation steps to maintain effective learning rate
+                    loss = loss / self.accumulation_steps
+                
+                # Backward pass with GradScaler
+                self.scaler.scale(loss).backward()
             
             # Perform optimizer step only after accumulation_steps or at epoch end
             if (step + 1) % self.accumulation_steps == 0 or (step + 1) == len(self.train_loader):
@@ -174,7 +185,18 @@ class Trainer:
                 total += labels.size(0)
                 correct += predicted.eq(labels).sum().item()
                 
-        val_loss = total_loss / len(self.val_loader)
+        # Aggregate validation metrics across all GPUs
+        is_ddp = getattr(self.cfg.hardware, "mode", "single") == "ddp"
+        if is_ddp and torch.distributed.is_initialized():
+            import torch.distributed as dist
+            metrics = torch.tensor([total_loss, correct, total], dtype=torch.float64, device=self.device)
+            dist.all_reduce(metrics, op=dist.ReduceOp.SUM)
+            total_loss, correct, total = metrics.tolist()
+            num_batches = len(self.val_loader) * dist.get_world_size()
+        else:
+            num_batches = len(self.val_loader)
+
+        val_loss = total_loss / num_batches
         val_acc = 100. * correct / total
         
         # Log validation metrics
@@ -195,6 +217,7 @@ class Trainer:
             "epoch": epoch,
             "model_state_dict": model_to_save.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
+            "scheduler_state_dict": self.scheduler.state_dict() if self.scheduler else None,
             "val_acc": val_acc,
         }, checkpoint_path)
         
