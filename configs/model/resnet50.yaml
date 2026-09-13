@@ -1,7 +1,7 @@
 name: "resnet50"
 num_classes: 100
-learning_rate: 0.001
+learning_rate: 0.1
 weight_decay: 0.0001
 epochs: 10
-warmup_epochs: 2
+warmup_epochs: 5
 max_grad_norm: 1.0
