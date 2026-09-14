@@ -219,7 +219,7 @@ class Trainer:
             self.logger.log_scalar("val/top1_accuracy", val_acc_top1, epoch)
             self.logger.log_scalar("val/top5_accuracy", val_acc_top5, epoch)
             
-        return val_loss, val_acc_top1
+        return val_loss, val_acc_top1, val_acc_top5
 
     def _save_checkpoint(self, epoch, val_acc, is_best=True):
         os.makedirs(self.output_dir, exist_ok=True)
