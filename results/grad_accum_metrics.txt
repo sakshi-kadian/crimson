@@ -1,6 +1,6 @@
 Gradient Accumulation Impact Analysis
 Hardware: Kaggle NVIDIA T4 x2
-Model: ResNet-50 | Dataset: CIFAR-100
+Model: ResNet-50 | Dataset: CIFAR-100 (100 Epochs)
 
 Without Gradient Accumulation (Single GPU, Run 1 (Baseline)):
   Accumulation Steps: 1
