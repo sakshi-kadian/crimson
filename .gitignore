@@ -19,3 +19,6 @@ outputs/
 # Auto-generated DDP outputs and test caches
 outputs_ddp/
 .pytest_cache/
+
+# PyTorch Profiler traces (large JSON files)
+results/profiler/
