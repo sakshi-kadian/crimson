@@ -14,5 +14,6 @@ outputs/
 /data/
 
 # TensorBoard raw event files (too large, not human-readable)
-logs/
+/logs/
+
 
