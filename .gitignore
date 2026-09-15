@@ -16,4 +16,6 @@ outputs/
 # TensorBoard raw event files (too large, not human-readable)
 /logs/
 
-
+# Auto-generated DDP outputs and test caches
+outputs_ddp/
+.pytest_cache/
